@@ -1,51 +1,95 @@
-# Search Cognitive Firewall
+# Google Cognitive Firewall (GCF)
 
-Search Cognitive Firewall (SCF) is a local-only userscript that reduces cognitive noise on search engine results pages by removing non-essential UI elements.
+Google Cognitive Firewall is a **subtractive, presentation-layer userscript** for Google Search.
 
-## What it does
-- Removes pre-result AI summaries and engagement-first modules
-- Preserves access to original sources and full result depth
-- Does not rank, judge, summarize, or automate decisions
-- Runs entirely client-side with deterministic behavior
+It reduces non-essential SERP clutter while preserving full access to information, user intent, and manual judgment.
 
-## What it is not
-- Not an AI assistant
-- Not a content filter
-- Not a ranking or recommendation system
-- Not a tracking or analytics tool
+This project does **not** rank results, summarize content, inject AI, or automate decisions.  
+It exists to reclaim cognitive bandwidth — locally, transparently, and by choice.
+
+---
 
 ## Design principles
-- Subtractive design over additive features
-- Preserve user intent and inspection order
-- Fail open, never guess
-- No data collection, monetization, or ideology
 
-## Install (Firefox)
-1. Install the Violentmonkey extension.
-2. Open `src/search-cognitive-firewall.user.js` in this repository.
-3. Click **Raw** and install when prompted.
-4. Run a Google search to confirm SCF is active.
+- **Subtractive over additive**  
+  Remove structural noise instead of adding new interfaces.
 
-## What SCF Will Never Do
+- **User agency first**  
+  Manual toggle. No automation of judgment.
 
-SCF is intentionally limited by design. It does not attempt to improve, interpret, or optimize search results.
+- **Fail-open by design**  
+  If something breaks or changes upstream, Google Search remains usable.
 
-Specifically, SCF will never:
-- Rank, reorder, or suppress organic results
-- Generate summaries, suggestions, or alternative queries
-- Judge relevance, credibility, or intent
-- Inject AI-generated content or guidance
-- Collect data, analytics, or telemetry
-- Store state, preferences, or user behavior
+- **Local-only execution**  
+  No telemetry, analytics, tracking, or network interception.
 
-These constraints are not temporary omissions. They are core to SCF’s purpose. The project prioritizes preserving human judgment over automating it.
+- **Deterministic behavior**  
+  No heuristics, prediction, or adaptive logic.
 
-## Reversibility and Trust
+---
 
-SCF is designed to be fully reversible, transparent, and local-only.
+## Minimum Mode (v0.2)
 
-When enabled, SCF modifies only the presentation layer of supported search engines. When disabled, all changes disappear immediately and the platform returns to its native behavior. No settings persist, no state is saved, and no functionality is permanently altered.
+This release prioritizes **stability and reversibility** over aggressive removal.
 
-SCF does not intercept network traffic, does not communicate externally, and does not depend on remote services. All behavior is deterministic and inspectable in the source code.
+Minimum Mode is intentionally conservative. It aims to improve scan clarity and reduce cognitive interruption without risking broken layouts or lost access to results.
 
-Trust is established not through promises, but through restraint. SCF aims to earn trust by doing less, clearly, and reversibly.
+---
+
+## What this version guarantees
+
+- Preserves access to organic results (fail-open)
+- Runs locally (no network interception, telemetry, or data collection)
+- Subtractive presentation-layer changes only
+- User-controlled ON/OFF toggle
+- Session-only persistence:
+  - stays enabled across reloads in the same tab
+  - resets when the tab or browser window is closed
+
+---
+
+## Known limitations (by design)
+
+- Google frequently A/B tests SERP layouts; some modules may reappear
+- Selectors are **best-effort** to avoid breaking search
+- This project does not guarantee permanent removal of all UI elements
+- Layout behavior may vary by language, region, or account state
+
+These limitations are intentional trade-offs in favor of stability and user trust.
+
+---
+
+## What this project is not
+
+- Not an AI assistant
+- Not a ranking system
+- Not a content filter
+- Not an ad blocker
+- Not an attempt to defeat or bypass Google systems
+
+GCF modifies **presentation only**, leaving content, ordering, and interpretation to the user.
+
+---
+
+## Installation
+
+1. Install a userscript manager such as **Violentmonkey**
+2. Create a new userscript
+3. Paste the contents of `src/google-cognitive-firewall.user.js`
+4. Save and visit Google Search
+5. Use the on-page toggle to enable or disable GCF
+
+---
+
+## Project status
+
+- **Engine:** Google Search
+- **Mode:** Minimum Mode only
+- **Stability:** Actively tested against live layouts
+- **Future work:** Research / strict modes, additional engines (out of scope for v0.2)
+
+---
+
+## License
+
+MIT
