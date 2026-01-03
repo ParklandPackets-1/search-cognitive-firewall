@@ -28,12 +28,43 @@ It exists to reclaim cognitive bandwidth — locally, transparently, and by choi
 
 ---
 
+## Browser configuration (optional)
+
+GCF is designed to work with standard userscript managers such as Tampermonkey or Violentmonkey.
+
+Recommended configuration:
+- Pin the userscript manager to your browser toolbar for visibility and quick access
+- Allow the manager to run in Incognito if you want GCF active during private searches
+
+GCF remains local-only, session-scoped, and domain-limited regardless of browser mode.
+
+---
+
 ## Minimum Mode (v0.2)
 
 This release prioritizes **stability and reversibility** over aggressive removal.
 
 Minimum Mode is intentionally conservative. It aims to improve scan clarity and reduce cognitive interruption without risking broken layouts or lost access to results.
 
+---
+
+## Permissions & scope
+
+Some userscript managers require enabling access on “All sites.”  
+This is a manager-level setting and does **not** change GCF’s actual execution scope.
+
+GCF itself is restricted by its match rules and only runs on Google Search pages:
+
+- `https://www.google.*/*`
+- `https://www.google.*/*search*`
+
+International Google domains (e.g. google.ca, google.co.uk, google.de) are supported automatically.
+
+GCF does not:
+- Run on non-Google sites
+- Intercept network requests
+- Collect, transmit, or store user data
+  
 ---
 
 ## What this version guarantees
