@@ -1,161 +1,312 @@
 // ==UserScript==
-// @name         Search Cognitive Firewall
-// @namespace    search-cognitive-firewall
-// @version      0.1.2
-// @description  Subtractive presentation-layer firewall for SERPs (Google/Bing). Local-only, reversible, deterministic, fail-open.
-// @match        https://www.google.com/search*
-// @match        https://www.bing.com/search*
-// @run-at       document-end
+// @name         Google Cognitive Firewall (GCF)
+// @namespace    google-cognitive-firewall
+// @version      0.2.3
+// @description  Subtractive SERP cleanup for Google. Session-only persistence (reload keeps state; closing tab resets). Local-only. Fail-open.
+// @match        https://www.google.*/*q=*
+// @match        https://www.google.*/*search*
+// @run-at       document-idle
 // @grant        none
 // ==/UserScript==
 
-// ===== SCF: DESIGN CONTRACT (READ ME FIRST) =====
 /*
-----------------------------------------------------------------
-Search Cognitive Firewall — v0.1.2
+================================================================
+Google Cognitive Firewall (GCF) — Minimum Mode
 
 Design contract:
-- Subtractive only
-- No ranking, judging, summarizing, or automation
-- No storage, telemetry, or network activity
-- Deterministic behavior
-- Fail open (native SERP always recoverable)
+- Subtractive only (presentation-layer cleanup)
+- No ranking, judging, summarizing, or “smart” filtering
+- Local-only: no telemetry, no network interception
+- Deterministic toggle: user-controlled ON/OFF
+- Fail-open: if selectors miss, Google remains usable
 
-Path B invariant (inspection-order enforcement):
-- When SCF is ON, hide any composite/non-organic blocks that appear
-  BEFORE the first true organic result.
-- This is structural sequencing, not content judgment.
-
-If this script ever breaks:
-- Search MUST continue to work normally (fail open).
-----------------------------------------------------------------
+Stability stance:
+- Google A/B tests SERP layouts; modules may reappear.
+- This release prioritizes "never break search" over completeness.
+================================================================
 */
 
-(function () {
+(() => {
   'use strict';
 
-  // ===== SCF: INTERNAL STATE (IN-MEMORY ONLY) =====
-  let enabled = false;   // default OFF (fail-open)
-  let styleEl = null;
-  let observer = null;
+  // =========================
+  // CONFIG
+  // =========================
+  const STYLE_ID = 'gcf-style';
+  const TOGGLE_ID = 'gcf-toggle';
+  const KEY = 'gcf_enabled'; // sessionStorage: persists across reloads, resets when tab/window closes
 
-  // ===== SCF: CSS_RULES (STRUCTURAL SUBTRACTION ONLY) =====
-  // WARNING: No content-based filtering. No ranking. No “smart” rules.
+  // Header phrases (English + French variants seen so far)
+  const HEADERS = {
+    peopleAlsoAsk: [
+      'People also ask',
+      'Autres questions posées',
+    ],
+    popularProducts: [
+      'Popular products',
+      'Produits populaires',
+    ],
+    inStoresNearby: [
+      'In stores nearby',
+      'En magasin à proximité',
+      'En magasins à proximité',
+    ],
+    videos: [
+      'Videos',
+      'Vidéos',
+    ],
+    peopleAlsoSearchFor: [
+      'People also search for',
+      'People also searched for',
+      'Related searches',
+      'Searches related to',
+      'Recherches associées',
+      'Autres recherches associées',
+      'Recherches liées à',
+    ],
+    relatedProductsServices: [
+      'Find related products & services',
+      'Find related products and services',
+      'Trouver des produits et services associés',
+    ],
+  };
+
+  // CSS removal is intentionally conservative (avoid broad structural selectors).
   const CSS_RULES = `
-/* ---------------- Google ---------------- */
+/* Internal hide marker */
+.gcf-hide { display: none !important; }
 
-/* Reason: Internal SCF marker class used to hide entire modules deterministically */
-.scf-hide-module { display: none !important; }
+/* Top nav / filter chips (layout-dependent; best-effort) */
+#hdtb,
+#appbar { display: none !important; }
 
-/* Reason: Paid attention redirection, not organic results */
-#tads, #tadsb, #bottomads, .uEierd { display: none !important; }
+/* Right rail */
+#rhs,
+#rhscol { display: none !important; }
 
-/* Reason: Right-rail attention anchoring; reduces scan integrity */
-#rhs, #rhscol, .osrp-blk { display: none !important; }
-
-/* Reason: Branching prompts that interrupt linear scanning (some PAA variants).
-   NOTE: Path B will hide remaining pre-organic shells above first organic result. */
-.related-question-pair, .kp-blk { display: none !important; }
-
-/* Reason: Visual interruption via non-text carousels / packs (common variants) */
-g-scrolling-carousel, .ULSxyf, .mR2gOd { display: none !important; }
-
-/* ---------------- Bing ---------------- */
-
-/* Reason: Paid attention redirection, not organic results */
-#b_context .b_ad, .b_ad, .b_ans .b_ad { display: none !important; }
-
-/* Reason: Right-rail attention anchoring; reduces scan integrity */
-#b_context { display: none !important; }
+/* Ads */
+#tads,
+#tadsb,
+#bottomads { display: none !important; }
 `;
 
-  // ===== SCF: HELPERS =====
+  // =========================
+  // STATE
+  // =========================
+  let enabled = sessionStorage.getItem(KEY) === '1';
+  let observer = null;
 
-  function isGoogle() {
-    return location.hostname.includes('google.');
-  }
-
-  function isBing() {
-    return location.hostname.includes('bing.com');
-  }
-
-  function getGoogleRoot() {
-    // Google layouts vary; these cover most.
+  // =========================
+  // DOM ROOTS
+  // =========================
+  function getResultsRoot() {
     return (
-      document.querySelector('#center_col') ||
       document.querySelector('#search') ||
+      document.querySelector('#center_col') ||
+      document.querySelector('#main') ||
       document.querySelector('main')
     );
   }
 
-  // Find the first outbound (non-Google) organic link inside the results root.
-  // Deterministic: structural constraints only.
-  function findFirstOrganicLink(root) {
-    const anchors = root.querySelectorAll('a[href]');
-    for (const a of anchors) {
-      const href = a.getAttribute('href');
-      if (!href) continue;
-      if (!href.startsWith('http')) continue;
+  function getObserverRoot() {
+    // Prefer #search when available; fall back to body.
+    return document.querySelector('#search') || document.body;
+  }
 
-      // Exclude internal Google links / nav chrome
-      if (href.includes('google.com')) continue;
+  // =========================
+  // STYLE INJECTION
+  // =========================
+  function ensureStyle() {
+    let style = document.getElementById(STYLE_ID);
+    if (style) return;
 
-      // Exclude obvious ad containers
-      if (a.closest('#tads, #tadsb, #bottomads')) continue;
+    style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.type = 'text/css';
+    style.textContent = CSS_RULES;
+    (document.head || document.documentElement).appendChild(style);
+  }
 
-      return a;
+  function removeStyle() {
+    const style = document.getElementById(STYLE_ID);
+    if (style) style.remove();
+  }
+
+  // =========================
+  // SAFE MODULE HIDING
+  // =========================
+  function findHeaderElements(root, headerPhrases) {
+    if (!root) return [];
+    const candidates = root.querySelectorAll('span, div, h2, h3');
+    const out = [];
+
+    for (const el of candidates) {
+      const t = (el.textContent || '').trim();
+      if (!t) continue;
+
+      for (const phrase of headerPhrases) {
+        if (t === phrase || t.startsWith(phrase)) {
+          out.push(el);
+          break;
+        }
+      }
+    }
+    return out;
+  }
+
+  function isUnsafeToHide(node) {
+    if (!node || node.nodeType !== 1) return true;
+
+    const id = (node.id || '').toLowerCase();
+    const tag = (node.tagName || '').toUpperCase();
+
+    // Never hide whole-page / whole-results containers
+    if (tag === 'HTML' || tag === 'BODY') return true;
+    if (id === 'search' || id === 'main' || id === 'center_col') return true;
+
+    // Never hide anything that contains organic results list
+    if (node.querySelector && node.querySelector('#rso')) return true;
+
+    return false;
+  }
+
+  function findModuleRoot(el, boundaryRoot) {
+    let cur = el;
+    let steps = 0;
+
+    while (cur && steps < 18) {
+      // If boundary is provided, prefer the direct child under it.
+      if (boundaryRoot && cur.parentElement === boundaryRoot) return cur;
+
+      // Prefer "module-ish" wrappers
+      if (cur.hasAttribute && (cur.hasAttribute('jscontroller') || cur.hasAttribute('data-hveid'))) {
+        return cur;
+      }
+
+      cur = cur.parentElement;
+      steps++;
     }
     return null;
   }
 
-  // ===== SCF: PATH B — INSPECTION-ORDER ENFORCEMENT (DOM ORDER) =====
-  // Hide all sibling blocks before the first organic result block.
-  // This fixes the “tall AI Overview” problem because we no longer use geometry.
-  function removePreOrganicBlocks() {
-    if (!enabled) return;
+  function hideByHeaderWithin(root, headerPhrases, boundaryRootForClimb) {
+    const headers = findHeaderElements(root, headerPhrases);
+    if (!headers.length) return 0;
 
-    if (isGoogle()) {
-      const root = getGoogleRoot();
-      if (!root) return;
+    let count = 0;
 
-      const firstOrganicLink = findFirstOrganicLink(root);
-      if (!firstOrganicLink) return;
+    for (const h of headers) {
+      const mod = findModuleRoot(h, boundaryRootForClimb || null);
+      if (!mod) continue;
+      if (isUnsafeToHide(mod)) continue;
 
-      // Walk up to the direct child of root that contains the first organic link.
-      let firstBlock = firstOrganicLink;
-      while (firstBlock && firstBlock.parentElement !== root) {
-        firstBlock = firstBlock.parentElement;
-      }
-      if (!firstBlock) return;
-
-      // Hide every previous sibling block (DOM order, deterministic).
-      let sib = firstBlock.previousElementSibling;
-      while (sib) {
-        sib.classList.add('scf-hide-module');
-        sib = sib.previousElementSibling;
-      }
-
-      return;
+      mod.classList.add('gcf-hide');
+      count++;
     }
 
-    if (isBing()) {
-      // v0.1.x: Bing is CSS-only for now
-      return;
+    return count;
+  }
+
+  // =========================
+  // APPLY / CLEAR
+  // =========================
+  function applyAllRemovals() {
+    if (!enabled) return;
+
+    ensureStyle();
+
+    const resultsRoot = getResultsRoot();
+
+    // In-results removals
+    hideByHeaderWithin(resultsRoot, HEADERS.peopleAlsoAsk, resultsRoot);
+    hideByHeaderWithin(resultsRoot, HEADERS.popularProducts, resultsRoot);
+    hideByHeaderWithin(resultsRoot, HEADERS.inStoresNearby, resultsRoot);
+    hideByHeaderWithin(resultsRoot, HEADERS.videos, resultsRoot);
+    hideByHeaderWithin(resultsRoot, HEADERS.relatedProductsServices, resultsRoot);
+
+    // “People also search for” often lives near the bottom.
+    // IMPORTANT: bounded zones only (no document-wide scans).
+    const bottomZones = [
+      document.querySelector('#botstuff'),
+      document.querySelector('#bres'),
+      document.querySelector('#foot'),
+      resultsRoot,
+    ].filter(Boolean);
+
+    for (const zone of bottomZones) {
+      hideByHeaderWithin(zone, HEADERS.peopleAlsoSearchFor, null);
     }
   }
 
-  // Observe SERP mutations to catch late-injected modules.
+  function clearAllRemovals() {
+    removeStyle();
+    document.querySelectorAll('.gcf-hide').forEach(el => el.classList.remove('gcf-hide'));
+  }
+
+  // =========================
+  // TOGGLE UI
+  // =========================
+  function updateToggle() {
+    const btn = document.getElementById(TOGGLE_ID);
+    if (!btn) return;
+    btn.textContent = enabled ? 'GCF: ON' : 'GCF: OFF';
+  }
+
+  function createToggle() {
+    if (document.getElementById(TOGGLE_ID)) return;
+
+    const btn = document.createElement('button');
+    btn.id = TOGGLE_ID;
+    btn.type = 'button';
+
+    btn.style.position = 'fixed';
+    btn.style.right = '14px';
+    btn.style.bottom = '14px';
+    btn.style.zIndex = '999999';
+    btn.style.padding = '8px 10px';
+    btn.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
+    btn.style.fontSize = '12px';
+    btn.style.fontWeight = '700';
+    btn.style.background = '#111';
+    btn.style.color = '#fff';
+    btn.style.border = '1px solid #444';
+    btn.style.borderRadius = '6px';
+    btn.style.cursor = 'pointer';
+    btn.style.opacity = '0.75';
+
+    btn.addEventListener('mouseenter', () => { btn.style.opacity = '1'; });
+    btn.addEventListener('mouseleave', () => { btn.style.opacity = '0.75'; });
+
+    btn.addEventListener('click', () => {
+      enabled = !enabled;
+      sessionStorage.setItem(KEY, enabled ? '1' : '0');
+      updateToggle();
+
+      if (enabled) {
+        applyAllRemovals();
+        startObserver();
+      } else {
+        stopObserver();
+        clearAllRemovals();
+      }
+    });
+
+    document.body.appendChild(btn);
+    updateToggle();
+  }
+
+  // =========================
+  // OBSERVER (late-injected modules)
+  // =========================
   function startObserver() {
-    if (!isGoogle()) return;
-
-    const root = getGoogleRoot();
-    if (!root) return;
-
     stopObserver();
+
+    const root = getObserverRoot();
+    if (!root) return;
 
     observer = new MutationObserver(() => {
       if (!enabled) return;
-      removePreOrganicBlocks();
+      applyAllRemovals();
     });
 
     observer.observe(root, { childList: true, subtree: true });
@@ -168,86 +319,19 @@ g-scrolling-carousel, .ULSxyf, .mR2gOd { display: none !important; }
     }
   }
 
-  // ===== SCF: FIREWALL CONTROL (ENABLE / DISABLE) =====
-
-  function enableFirewall() {
-    if (styleEl) return;
-
-    styleEl = document.createElement('style');
-    styleEl.id = 'scf-style';
-    styleEl.textContent = CSS_RULES;
-    document.head.appendChild(styleEl);
-
-    enabled = true;
-    updateToggle();
-
-    // Path B enforcement now + watch for late injection
-    removePreOrganicBlocks();
-    startObserver();
-  }
-
-  function disableFirewall() {
-    if (!styleEl) return;
-
-    styleEl.remove();
-    styleEl = null;
-
-    enabled = false;
-    updateToggle();
-
-    stopObserver();
-
-    // Remove our marker classes (reversible)
-    document.querySelectorAll('.scf-hide-module').forEach(el => el.classList.remove('scf-hide-module'));
-  }
-
-  // ===== SCF: TOGGLE UI (USER-CONTROLLED, REVERSIBLE) =====
-
-  function createToggle() {
-    const btn = document.createElement('button');
-    btn.id = 'scf-toggle';
-    btn.type = 'button';
-
-    btn.style.position = 'fixed';
-    btn.style.right = '14px';
-    btn.style.bottom = '14px';
-    btn.style.zIndex = '999999';
-
-    btn.style.padding = '8px 10px';
-    btn.style.fontFamily = 'system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif';
-    btn.style.fontSize = '12px';
-    btn.style.fontWeight = '600';
-
-    btn.style.background = '#111';
-    btn.style.color = '#fff';
-    btn.style.border = '1px solid #444';
-    btn.style.borderRadius = '6px';
-    btn.style.cursor = 'pointer';
-    btn.style.opacity = '0.70';
-
-    btn.addEventListener('mouseenter', () => { btn.style.opacity = '1'; });
-   
-
-  function updateToggle() {
-    const btn = document.getElementById('scf-toggle');
-    if (!btn) return;
-    btn.textContent = enabled ? 'SCF: ON' : 'SCF: OFF';
-  }
-
-  // ===== SCF: BOOT SEQUENCE =====
+  // =========================
+  // BOOT
+  // =========================
   function init() {
     createToggle();
-    // Default OFF (fail open)
+
+    if (enabled) {
+      applyAllRemovals();
+      startObserver();
+    } else {
+      clearAllRemovals(); // fail-open
+    }
   }
 
   init();
-
-})(); btn.addEventListener('mouseleave', () => { btn.style.opacity = '0.70'; });
-
-    btn.addEventListener('click', () => {
-      enabled ? disableFirewall() : enableFirewall();
-    });
-
-    document.body.appendChild(btn);
-    updateToggle();
-  }
+})();
